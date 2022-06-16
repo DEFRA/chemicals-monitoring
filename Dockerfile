@@ -18,5 +18,5 @@ USER jreuser
 EXPOSE 8096
 
 CMD java -javaagent:/usr/src/reach-monitoring/applicationinsights-agent.jar \
--Xmx${JAVA_MX:-512M} -Xms${JAVA_MS:-512M} \
+-Xmx${JAVA_MX:-512M} -Xms${JAVA_MS:-256M} \
 -jar reach-monitoring.jar

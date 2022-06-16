@@ -26,6 +26,14 @@ node (label: 'autoSlaveLive') {
 
   withEnv(environmentVariables) {
     def CREATE_DB = []
-    reachPipeline(CREATE_DB)
+    def STORAGE_CONTAINERS = []
+    def runIntegrationTests = {
+      withMaven(
+              options: [artifactsPublisher(disabled: true), jacocoPublisher(disabled: true)], mavenOpts: helper.getMavenOpts()
+      ) {
+          sh(label: "Run e2e tests", script: "mvn verify -P e2e-tests -DMONITORING_SERVICE_URL=https://${APP_NAME}.${APPLICATION_URL_SUFFIX}")
+      }
+    }
+    reachPipeline(CREATE_DB, STORAGE_CONTAINERS, runIntegrationTests)
   }
 }

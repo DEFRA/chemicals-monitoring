@@ -1,42 +1,48 @@
 package uk.gov.defra.reach.monitoring.integration;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.databind.SerializationFeature;
-import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
-import com.microsoft.azure.eventhubs.*;
-import lombok.extern.slf4j.Slf4j;
-import org.junit.Before;
-import org.junit.Test;
-import org.junit.runner.RunWith;
-import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.beans.factory.annotation.Value;
-import org.springframework.boot.test.context.SpringBootTest;
-import org.springframework.boot.test.web.client.TestRestTemplate;
-import org.springframework.http.*;
-import org.springframework.test.context.TestPropertySource;
-import org.springframework.test.context.junit4.SpringRunner;
-import uk.gov.defra.reach.monitoring.entity.MonitoringEvent;
-import uk.gov.defra.reach.monitoring.entity.MonitoringEventRequest;
-import uk.gov.defra.reach.monitoring.util.TestUtils;
+import static java.util.concurrent.CompletableFuture.anyOf;
+import static org.assertj.core.api.Assertions.assertThat;
 
 import java.io.IOException;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
-import java.util.concurrent.*;
 
-import static java.util.concurrent.CompletableFuture.anyOf;
-import static org.assertj.core.api.Assertions.assertThat;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.springframework.http.HttpEntity;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.HttpMethod;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.ResponseEntity;
+
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.SerializationFeature;
+import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
+import com.microsoft.azure.eventhubs.ConnectionStringBuilder;
+import com.microsoft.azure.eventhubs.EventData;
+import com.microsoft.azure.eventhubs.EventHubClient;
+import com.microsoft.azure.eventhubs.EventHubException;
+import com.microsoft.azure.eventhubs.EventHubRuntimeInformation;
+import com.microsoft.azure.eventhubs.EventPosition;
+import com.microsoft.azure.eventhubs.PartitionReceiver;
+import com.microsoft.azure.eventhubs.TransportType;
+
+import lombok.extern.slf4j.Slf4j;
+import uk.gov.defra.reach.monitoring.entity.MonitoringEvent;
+import uk.gov.defra.reach.monitoring.entity.MonitoringEventRequest;
+import uk.gov.defra.reach.monitoring.util.TestUtils;
 
 @Slf4j
-@RunWith(SpringRunner.class)
-@SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
-@TestPropertySource(locations="classpath:application-int.properties")
-public class EventMessageIT {
+public class EventMessageIT extends IntegrationCommon {
 
-  @Autowired
-  private TestRestTemplate template;
+  private static final String EVENT_HUB_CONNECTION_STRING = "Endpoint=sb://sndchminfens001.servicebus.windows.net/;SharedAccessKeyName=PreviewDataPolicy;SharedAccessKey=3TOO//eIasJRmadtliAAJQ2PxqaHLwXcKjtKzn1NXB0=;EntityPath=sndchmeventhubtest";
 
   private ObjectMapper objectMapper = new ObjectMapper()
           .disable(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS)
@@ -46,16 +52,7 @@ public class EventMessageIT {
 
   private ScheduledExecutorService executorService;
 
-  @Value("${test.jwt.token}")
-  private String testJwtToken;
-
-  @Value("${event.hub.connection.string}")
-  private String eventHubConnectionString;
-
-  @Value("${event.hub.connection.web_sockets:false}")
-  private boolean webSockets;
-
-  @Before
+  @BeforeEach
   public void setup() throws IOException, EventHubException {
     if (eventHubClient != null) {
       eventHubClient.close();
@@ -67,21 +64,21 @@ public class EventMessageIT {
 
     executorService = Executors.newScheduledThreadPool(4);
 
-    ConnectionStringBuilder connectionStringBuilder = new ConnectionStringBuilder(eventHubConnectionString);
-    connectionStringBuilder.setTransportType(webSockets ? TransportType.AMQP_WEB_SOCKETS : TransportType.AMQP);
+    ConnectionStringBuilder connectionStringBuilder = new ConnectionStringBuilder(EVENT_HUB_CONNECTION_STRING);
+    connectionStringBuilder.setTransportType(TransportType.AMQP_WEB_SOCKETS);
     eventHubClient = EventHubClient.createSync(connectionStringBuilder.toString(), executorService);
   }
 
   @Test
   public void healthCheck_shouldReturn200_withoutAuthentication() {
-    ResponseEntity<String> response = template.exchange(TestUtils.HEALTH_CHECK_ENDPOINT, HttpMethod.GET, new HttpEntity<>(null, null), String.class);
+    ResponseEntity<String> response = REST_TEMPLATE.exchange(MONITORING_SERVICE_URL + TestUtils.HEALTH_CHECK_ENDPOINT, HttpMethod.GET, new HttpEntity<>(null, null), String.class);
     assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
   }
 
   @Test
   public void eventEndpoints_shouldPostMessageToEventHub() throws EventHubException, InterruptedException, ExecutionException, TimeoutException {
     HttpHeaders authHeaders = new HttpHeaders();
-    authHeaders.add(TestUtils.AUTHORIZATION_HEADER, testJwtToken);
+    authHeaders.setBearerAuth(TEST_JWT_TOKEN);
     authHeaders.add(TestUtils.CONTENT_TYPE_HEADER, TestUtils.APPLICATION_JSON_HEADER_VALUE);
     authHeaders.add(TestUtils.X_FORWARED_FOR_HEADER, TestUtils.X_FORWARED_FOR_HEADER_VALUE);
 
@@ -89,7 +86,7 @@ public class EventMessageIT {
 
     Instant startTime = Instant.now();
 
-    template.exchange(TestUtils.EVENT_ENDPOINT, HttpMethod.POST, new HttpEntity<>(monitoringEventRequest, authHeaders), String.class);
+    REST_TEMPLATE.exchange(MONITORING_SERVICE_URL + TestUtils.EVENT_ENDPOINT, HttpMethod.POST, new HttpEntity<>(monitoringEventRequest, authHeaders), String.class);
 
     assertThat(findEvent(monitoringEventRequest, startTime)).isTrue();
   }
